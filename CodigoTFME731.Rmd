@@ -1,0 +1,616 @@
+---
+title: "Untitled"
+author: "Gabriel Vieira Cardoso"
+date: "2025-11-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#install.packages("readxl")
+library(readxl)
+library(ggplot2)
+library(mice)
+```
+
+
+```{r}
+dados1 <- read_excel("cachorros.xlsx")
+colnames(dados1)
+```
+
+```{r}
+dados <- dados1
+
+soma <- colSums(is.na(dados))
+
+ranking_tabela <- data.frame(
+  Total_NA = soma,
+  Porcentagem = round((soma / nrow(dados)) * 100, 2))
+
+(ranking_tabela <- ranking_tabela[order(ranking_tabela$Total_NA, decreasing = TRUE), ])
+```
+
+
+```{r}
+#Existem 3 obs de "Mandible" e as 3 não tem dados.
+sum(dados$`Skeletal part` == "Mandible")
+dados[dados$`Skeletal part` == "Mandible", ]
+
+summary(dados$`Skeletal part`)
+dados <- dados[dados$`Skeletal part` != "Mandible", ] # RETIREI as 3 obs
+summary(dados$`Skeletal part`)
+```
+
+```{r}
+options(stringsAsFactors = FALSE)
+set.seed(246216)
+
+library(mice)
+
+dados <- dados1[, c("ID", "Site location", "Start Period", "End Period", "Latitude", "Longitude", "Skeletal part", "C-C'", "C-D", "A-C", "A-D", "D-mu", "L-L'", "J-J'", "H-H'", "F-F'", "S-Q'", "D-Q'", "D-S", "DIII", "DIII-IV", "DII-III", "T-T'", "E-E'", "Eps-Eps’", "A-S (S')", "C-S", "B-s", "PM4")]
+
+to_numeric <- function(x) {
+  if (is.numeric(x)) return(x)
+  x2 <- gsub(",", ".", x)              
+  x2 <- gsub("[^0-9\\.]", "", x2)     
+  x2[x2 == ""] <- NA
+  as.numeric(x2)}
+
+idx_coords <- !is.na(dados$Latitude) & !is.na(dados$Longitude)
+dados_geo <- dados[idx_coords, ]
+
+#A-S (S')
+dados_geo$`A-S (S')_orig` <- dados_geo$`A-S (S')`
+x <- as.character(dados_geo$`A-S (S')`)
+inside_raw <- ifelse(
+  grepl("\\(", x),
+  sub(".*\\(([^()]*)\\).*", "\\1", x),
+  NA_character_)
+
+outside_raw <- ifelse(
+  grepl("\\(", x),
+  gsub("\\([^()]*\\)", "", x),  
+  x)
+
+inside_raw  <- gsub("^\\s+|\\s+$", "", inside_raw)
+outside_raw <- gsub("^\\s+|\\s+$", "", outside_raw)
+
+inside_raw[inside_raw == ""]   <- NA
+outside_raw[outside_raw == ""] <- NA
+
+dados_geo$`A-S`  <- to_numeric(outside_raw)
+dados_geo$`A-S'` <- to_numeric(inside_raw)
+
+dados_geo$`A-S (S')` <- NULL
+dados_geo$`A-S (S')_orig` <- NULL
+
+
+#vars cranio
+vars_cran_all <- c("C-C'", "C-D", "A-C", "A-D", "D-mu",
+                   "L-L'", "J-J'", "H-H'", "F-F'",
+                   "S-Q'", "D-Q'", "D-S",
+                   "DIII", "DIII-IV", "DII-III",
+                   "T-T'", "E-E'", "Eps-Eps’",
+                   "A-S","A-S'", "C-S", "B-s", "PM4")
+
+vars_cran <- intersect(vars_cran_all, colnames(dados_geo))
+
+#botar tudo em numerico
+for (nm in vars_cran) {dados_geo[[nm]] <- to_numeric(dados_geo[[nm]])}
+
+dados <- dados[dados$`Skeletal part` != "Mandible", ] # RETIREI as 3 obs
+#Matriz medidas cranianas
+X_cran <- dados_geo[, vars_cran]
+
+
+periodos <- c(
+  "Early Iron Age",
+  "Middle Iron Age",
+  "Late Iron Age",
+  "Iron Age",
+  "Early Roman Age A",
+  "Early Roman Age B",
+  "Middle Roman Age A",
+  "Middle Roman Age B",
+  "Middle Roman Age",
+  "Late Roman Age A",
+  "Late Roman Age B",
+  "Late Roman Age",
+  "Roman Age",
+  "Early Medieval Period A",
+  "Early Medieval Period B",
+  "Early Medieval Period C",
+  "Early Medieval Period D",
+  "Early Medieval Period",
+  "Late Medieval Period A",
+  "Late Medieval Period B",
+  "Late Medieval Period",
+  "Middle Ages",
+  "Modern Era A",
+  "Modern Era B",
+  "Modern Era C",
+  "Modern Era",
+  "Recent")
+enum_periodos <- setNames(seq_along(periodos), periodos)
+write.csv(dados_geo, "cachorroslimpo.csv", row.names = FALSE)
+```
+
+
+```{r}
+################################################################################
+## Boxplot das medidas cranianas
+
+medidas <- intersect(vars_cran_all, colnames(dados_geo))
+selected <- dados_geo[, medidas, drop = FALSE]
+selected[] <- lapply(selected, to_numeric)
+
+long <- stack(selected)
+colnames(long) <- c("valor", "medida")
+long <- long[!is.na(long$valor), ]
+
+##Boxplot
+#png("boxplotpre.png", width = 1000, height = 800, res = 200)
+ggplot(long, aes(x = medida, y = valor)) +
+  geom_boxplot() +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  labs(
+    x = NULL,
+    y = "Valor (mm)",
+    title = "")
+```
+
+
+```{r}
+################################################################################
+## Corplor
+mat_correl <- cor(X_cran, use = "pairwise.complete.obs")
+mat_correl[is.na(mat_correl)] <- 0
+
+cor_long <- as.data.frame(as.table(mat_correl))
+names(cor_long) <- c("Var1", "Var2", "value")
+
+#Heatmap
+#png("heatmappre.png", width = 1000, height = 800, res = 200)
+ggplot(cor_long, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low       = "#D73027",
+    high      = "#4575B4",
+    mid       = "white",
+    midpoint  = 0,
+    limit     = c(-1, 1),
+    space     = "Lab",
+    name      = "Correlação"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x  = element_text(angle = 90, vjust = 0.5, hjust = 1, color = "black"),
+    axis.text.y  = element_text(color = "black"),
+    axis.title   = element_blank(),
+    panel.grid   = element_blank(),
+    legend.title = element_text(face = "bold")
+  ) +
+  coord_fixed() +
+  labs(title = "")
+
+```
+
+
+```{r}
+################################################################################
+## MICE GLOBAL
+
+rodar_mice_global <- function(dados_geo_in, vars_cran, k_geo, m, maxit, plot_elbow = FALSE) {
+  dados_tmp <- dados_geo_in
+
+  X_cran <- dados_tmp[, vars_cran, drop = FALSE]
+  
+  #objeto mice inicial
+  ini  <- mice(X_cran, maxit = 0, printFlag = FALSE)
+  meth <- ini$method
+  pred <- ini$predictorMatrix
+
+  meth[] <- "pmm"
+  
+  #MICE global
+  imp <- mice(X_cran,m = m, method = meth, predictorMatrix = pred, maxit = maxit, printFlag = FALSE)
+  
+  #Matriz imputada
+  X_cran_imp <- complete(imp, action = 1)
+  dados_tmp[, vars_cran] <- X_cran_imp
+  
+  ##Clusterização
+  coord_mat <- cbind(dados_tmp$Latitude, dados_tmp$Longitude)
+  colnames(coord_mat) <- c("Latitude", "Longitude")
+  coord_scaled <- scale(coord_mat)
+  
+  ##curva
+  if (plot_elbow == TRUE) {
+    ks  <- 1:10
+    wss <- numeric(length(ks))
+    for (i in seq_along(ks)) {
+      km_tmp <- kmeans(coord_scaled, centers = ks[i], nstart = 25)
+      wss[i] <- km_tmp$tot.withinss}
+    plot(ks, wss, type = "b",
+         xlab = "Número de clusters (k)",
+         ylab = "Soma dos quadrados intra-cluster (WSS)",
+         main = "Curva do cotovelo – K-means geográfico")}
+  
+  ##K-means
+  km_geo <- kmeans(coord_scaled, centers = k_geo, nstart = 50)
+  
+  dados_tmp$GeoCluster <- factor(km_geo$cluster, labels = paste0("Regiao", seq_len(k_geo)))
+  
+  return(list(dados = dados_tmp,  X_imp= X_cran_imp,km_geo = km_geo,coord_scaled = coord_scaled))}
+```
+
+
+```{r}
+################################################################################
+## MICE ESTRATIFICADO
+
+
+rodar_mice_estrat <- function(dados_geo_in, vars_cran, k_geo, m, maxit, min_n, plot_elbow = FALSE) {
+  dados_tmp <- dados_geo_in
+  coord_mat <- cbind(dados_tmp$Latitude, dados_tmp$Longitude)
+  colnames(coord_mat) <- c("Latitude", "Longitude")
+  coord_scaled <- scale(coord_mat)
+  
+  if (plot_elbow == TRUE) {
+    ks  <- 1:10
+    wss <- numeric(length(ks))
+    for (i in seq_along(ks)) {
+      km_tmp <- kmeans(coord_scaled, centers = ks[i], nstart = 25)
+      wss[i] <- km_tmp$tot.withinss
+    }
+    plot(ks, wss, type = "b",
+         xlab = "Número de clusters (k)",
+         ylab = "Soma dos quadrados intra-cluster (WSS)",
+         main = "")
+  }
+  
+  km_geo <- kmeans(coord_scaled, centers = k_geo, nstart = 50)
+  dados_tmp$Cluster_Geo <- factor(km_geo$cluster,labels = paste0("Regiao", seq_len(k_geo)))
+  dados_tmp$RowID <- seq_len(nrow(dados_tmp))
+  name_map    <- setNames(make.names(vars_cran, unique = TRUE), vars_cran)
+  
+  lista_por_geo   <- split(dados_tmp, dados_tmp$Cluster_Geo)
+  lista_imputados <- vector("list", length(lista_por_geo))
+  names(lista_imputados) <- names(lista_por_geo)
+  
+  for (nm in names(lista_por_geo)) {
+    sub   <- lista_por_geo[[nm]]
+    X_sub <- sub[, vars_cran, drop = FALSE]
+    n_sub <- nrow(sub)
+
+    colnames(X_sub) <- name_map[vars_cran]
+    
+    #MICE
+    ini  <- mice(X_sub, maxit = 0, printFlag = FALSE)
+    meth <- ini$method
+    pred <- ini$predictorMatrix
+    meth[] <- "pmm"
+    
+    imp_sub <- mice(X_sub,m= m,method= meth,predictorMatrix = pred,maxit= maxit,printFlag= FALSE)
+    X_imp_safe <- complete(imp_sub, action = 1)
+    
+    colnames(X_imp_safe) <- vars_cran
+    sub[, vars_cran]     <- X_imp_safe
+    
+    lista_imputados[[nm]] <- sub}
+  
+  dados_imp <- do.call(rbind, lista_imputados)
+  dados_imp <- dados_imp[order(dados_imp$RowID), ]
+  
+  X_imp_strat <- as.matrix(dados_imp[, vars_cran, drop = FALSE])
+  
+  return(list(dados= dados_imp,X_imp= X_imp_strat,km_geo= km_geo,coord_scaled = coord_scaled))}
+
+```
+
+
+
+```{r}
+#MICE GLOBAL + cluster
+res_glo <- rodar_mice_global(dados_geo, vars_cran, m = 1, k_geo = 3, maxit= 20)
+dados_geo_glo    <- res_glo$dados     
+X_cran_imp_glo   <- res_glo$X_imp
+
+#MICE ESTRATIFICADO + cluster
+res_est <- rodar_mice_estrat(dados_geo, vars_cran, m = 1, k_geo = 3, maxit= 20)
+dados_geo_imp     <- res_est$dados    
+X_cran_imp_strat  <- res_est$X_imp
+
+```
+
+
+
+```{r}
+################################################################################
+## Dados escondidos
+X_original <- as.matrix(X_cran)
+colnames(X_original) <- vars_cran
+
+obs_idx <- which(!is.na(X_original), arr.ind = TRUE)
+n_obs   <- nrow(obs_idx)
+prop_hold <- 0.10 #esconde
+n_hold <- max(1, floor(prop_hold * n_obs))
+sel <- sample(seq_len(n_obs), n_hold)
+hold_idx <- obs_idx[sel, , drop = FALSE]
+
+X_true   <- X_original      
+X_escondi <- X_original      
+
+for (k in 1:nrow(hold_idx)) {
+  i <- hold_idx[k, "row"]
+  j <- hold_idx[k, "col"]
+  X_escondi[i, j] <- NA}
+
+dados_escon <- dados_geo
+dados_escon[, vars_cran] <- X_escondi
+
+```
+
+```{r}
+#MICE GLOBAL escondido
+res_glo_mask <- rodar_mice_global(dados_escon,vars_cran  = vars_cran,k_geo= 3,m= 1,maxit= 20,plot_elbow = FALSE)
+X_imp_glo_mask <- res_glo_mask$X_imp   # matriz imputada globalmente
+#MICE ESTRATIFICADO escondido
+res_est_mask <- rodar_mice_estrat(dados_escon,vars_cran  = vars_cran,k_geo= 3,m= 1, maxit= 20,min_n= 15,plot_elbow = FALSE)
+X_imp_est_mask <- res_est_mask$X_imp   # matriz imputada estratificada
+```
+
+
+```{r}
+idx_mat <- cbind(hold_idx[, "row"], hold_idx[, "col"])
+true_vals <- X_true[idx_mat]
+
+pred_g <- X_imp_glo_mask[idx_mat]   # MICE global
+pred_s <- X_imp_est_mask[idx_mat]   # MICE estratificado
+
+RMSE_global <- sqrt(mean((pred_g - true_vals)^2))
+RMSE_strat  <- sqrt(mean((pred_s - true_vals)^2))
+
+MAE_global  <- mean(abs(pred_g - true_vals))
+MAE_strat   <- mean(abs(pred_s - true_vals))
+
+cat("RMSE  - MICE GLOBAL       :", RMSE_global, "\n")
+cat("RMSE  - MICE ESTRATIFICADO:", RMSE_strat,  "\n")
+cat("MAE   - MICE GLOBAL       :", MAE_global,  "\n")
+cat("MAE   - MICE ESTRATIFICADO:", MAE_strat,   "\n")
+```
+
+
+```{r}
+################################################################################
+##Start Period como principal
+
+dados_geo$StartPeriod_fac <- factor(
+  dados_geo$`Start Period`,
+  levels  = periodos,
+  ordered = TRUE)
+
+#Remover linhas sem StartPeriod
+idx_time <- !is.na(dados_geo$StartPeriod_fac)
+dados_use <- dados_geo[idx_time, ]
+X_use     <- dados_use[, vars_cran, drop = FALSE]
+
+dados_use$StartPeriod_code <- as.numeric(dados_use$StartPeriod_fac)
+
+summary(dados_use$StartPeriod_fac)
+summary(dados_use$StartPeriod_code)
+```
+
+
+
+
+```{r}
+################################################################################
+## Scree plot
+idx_rows_ok <- apply(X_cran, 1, function(z) all(is.finite(z)))
+X_cran_pca <- X_cran[idx_rows_ok, , drop = FALSE]
+pca <- prcomp(X_cran_pca, center = TRUE, scale. = TRUE)
+
+eig_vals <- pca$sdev^2
+prop_var_exp <- eig_vals / sum(eig_vals)
+prop_var_exp_acumulada <- cumsum(prop_var_exp)
+
+banco_var_exp <- data.frame(
+  Componente             = seq_along(prop_var_exp),
+  prop_var_exp           = prop_var_exp,
+  prop_var_exp_acumulada = prop_var_exp_acumulada)
+
+x     <- banco_var_exp$Componente
+y     <- banco_var_exp$prop_var_exp
+y_cum <- banco_var_exp$prop_var_exp_acumulada
+
+ylim_max <- 1.05
+#png("Screeplot.png", width = 1000, height = 800, res = 200)
+plot(x, y_cum,
+     type = "n",
+     ylim = c(0, ylim_max),
+     xlab = "Componente",
+     ylab = "Prop. Variância Total Explicada",
+     xaxt = "n")
+abline(h = seq(0, 1, by = 0.1), col = "grey90", lty = "dotted")
+abline(v = x,                      col = "grey95", lty = "dotted")
+largura <- 0.45
+for (i in seq_along(x)) {
+  rect(x[i] - largura, 0,
+       x[i] + largura, y_cum[i],
+       col    = "lightblue",
+       border = "lightblue")}
+lines(x, y, lwd = 1.3)
+points(x, y, pch = 16)
+axis(1, at = x, labels = x)
+axis(2, at = seq(0, 1, by = 0.1))
+box()
+
+texto_pct <- paste0(round(y_cum * 100), "%")
+text(x, y_cum,
+     labels = texto_pct,
+     pos = 3,  
+     cex = 0.7)
+```
+
+
+
+
+
+```{r}
+################################################################################
+## 6. Cluster geográfico
+X_scaled <- scale(X_use)   # média 0, dp 1
+
+pca <- prcomp(X_scaled,
+              center = FALSE,
+              scale. = FALSE)
+
+eig_vals <- pca$sdev^2
+prop_var <- eig_vals / sum(eig_vals)
+cum_var  <- cumsum(prop_var)
+pc_scores <- pca$x
+pc1 <- pc_scores[, 1]
+pc2 <- pc_scores[, 2]
+
+tab_cluster_region <- table(dados_use$Cluster_morpho,dados_use$GeoCluster)
+
+prop_cluster_region <- prop.table(tab_cluster_region, margin = 2)
+prop_cluster_region
+
+cores_k <- c("red", "blue", "darkgreen", "orange", "purple")
+cols_morpho <- cores_k[as.numeric(dados_use$Cluster_morpho)]
+png("boxplPCAkmeansotpos.png", width = 1000, height = 800, res = 200)
+plot(pc1, pc2,
+     col  = cols_morpho,
+     pch  = 16,
+     xlab = "PC1 (medidas cranianas)",
+     ylab = "PC2 (medidas cranianas)",
+     main = "")
+
+legend("bottomright",
+       legend = levels(dados_use$Cluster_morpho),
+       col    = cores_k[seq_len(k_km)],
+       pch    = 16,
+       title  = "Cluster morfológico",
+       cex    = 0.8)
+
+```
+
+
+```{r}
+################################################################################
+## 6. Cluster geográfico e temporal
+tab_cluster_period <- table(dados_use$Cluster_morpho,
+                            dados_use$StartPeriod_fac)
+prop_cluster_period <- prop.table(tab_cluster_period, margin = 2)
+n_levels <- length(levels(dados_use$StartPeriod_fac))
+
+cols_time <- rep(cols_base, length.out = n_levels)
+
+cols_plot_time <- cols_time[as.numeric(dados_use$StartPeriod_fac)]
+
+tab_periodos <- table(dados_use$StartPeriod_fac)
+idx_used     <- which(tab_periodos > 0)                
+legend_labels <- names(tab_periodos)[idx_used]
+        
+par(mar = c(5, 4, 4, 10), xpd = TRUE) 
+plot(pc1, pc2,
+     col  = cols_plot_time,
+     pch  = 16,
+     xlab = "PC1 (medidas cranianas)",
+     ylab = "PC2 (medidas cranianas)",
+     main = "")
+
+legend("topright",
+       inset  = c(-0.3, 0),   
+       legend = legend_labels,
+       pch    = 16,
+       cex    = 0.7,
+       title  = "Start Period")
+```
+
+```{r}
+################################################################################
+## MANOVA: PCs de forma ~ Start Period 
+
+Y_pc <- pc_scores[, 1:kpc, drop = FALSE]   
+grupo_tempo <- dados_use$StartPeriod_fac   
+
+n <- nrow(Y_pc)
+k <- ncol(Y_pc)
+g <- length(levels(grupo_tempo))
+
+fit_manova_pc <- manova(Y_pc ~ grupo_tempo)
+summary(fit_manova_pc, test = "Pillai")
+summary_aov_pc <- summary.aov(fit_manova_pc)
+```
+
+
+```{r}
+################################################################################
+## Boxplot pos MICE
+col_orig <- colnames(dados_geo_imp)
+matched_idx <- match(medidas, colnames(dados_geo_imp))
+found_mask <- !is.na(matched_idx)
+selected_names <- col_orig[matched_idx[found_mask]]
+
+selected <- dados_geo_imp[, selected_names, drop = FALSE]
+colnames(selected) <- medidas[found_mask]
+
+long <- stack(selected)
+colnames(long) <- c("valor", "medida")
+
+#png("boxplotpos.png", width = 1000, height = 800, res = 200)
+ggplot(long, aes(x = medida, y = valor)) +
+  geom_boxplot(fill = "gray90", outlier.colour = "red", outlier.size = 1) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10)) +
+  labs(x = NULL, 
+       y = "Valor (mm)", 
+       title = "")
+```
+
+```{r}
+################################################################################
+## CORRplot pos MICE
+X_cran_imp <- dados_geo_imp[, vars_cran, drop = FALSE]
+
+mat_correl <- cor(X_cran_imp, use = "pairwise.complete.obs")
+mat_correl[is.na(mat_correl)] <- 0
+
+cor_long <- as.data.frame(as.table(mat_correl))
+names(cor_long) <- c("Var1", "Var2", "value")
+
+#Heatmap 
+#png("heatmappos.png", width = 800, height = 800, res = 200)
+ggplot(cor_long, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low       = "#D73027",
+    high      = "#4575B4",
+    mid       = "white",
+    midpoint  = 0,
+    limit     = c(-1, 1),
+    space     = "Lab",
+    name      = "Correlação"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x  = element_text(angle = 90, vjust = 0.5, hjust = 1, color = "black"),
+    axis.text.y  = element_text(color = "black"),
+    axis.title   = element_blank(),
+    panel.grid   = element_blank(),
+    legend.title = element_text(face = "bold")
+  ) +
+  coord_fixed() +
+  labs(title = "")
+```
+
